@@ -1,4 +1,4 @@
-package http
+package lib
 
 type Options struct {
 	isVerbose bool

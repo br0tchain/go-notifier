@@ -1,4 +1,4 @@
-package http
+package lib
 
 import (
 	"bytes"
@@ -11,13 +11,6 @@ import (
 	"net/http/httputil"
 	"net/url"
 )
-
-//ErrorHTTP Structure
-type ErrorHTTP struct {
-	error
-	StatusCode int
-	Status     string
-}
 
 //Client Interface
 type Client interface {
