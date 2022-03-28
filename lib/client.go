@@ -59,62 +59,65 @@ func New(setters ...Option) Client {
 // and return a channel for the notification result to be sent into.
 func (c *customClient) Notify(request *http.Request) <-chan *NotificationResult {
 	res := make(chan *NotificationResult, 1)
-	go func() {
-		defer close(res)
-
-		if c.isVerbose {
-			dumpRequest, errLog := httputil.DumpRequestOut(request, true)
-			if errLog == nil {
-				requestDump := string(dumpRequest)
-				log.Printf("request:\n %s\n", requestDump)
-			}
-		}
-		buf := new(bytes.Buffer)
-		buf.Reset()
-		// send payload
-		response, err := c.client.Do(request)
-		// handle technical errors
-		if err != nil {
-			res <- &NotificationResult{
-				IsError:      true,
-				ErrorDetails: err,
-			}
-			return
-		}
-		// flush body at the end to avoid memory leak
-		defer func() {
-			_ = response.Body.Close()
-		}()
-		// handle business errors
-		if inError(response.StatusCode) {
-			body, errRead := ioutil.ReadAll(response.Body)
-			if errRead != nil {
-				res <- &NotificationResult{
-					IsError:      true,
-					ErrorDetails: errors.Wrap(errRead, "cannot decode response body"),
-				}
-				return
-			}
-			res <- &NotificationResult{
-				IsError:      true,
-				ErrorDetails: fmt.Errorf("error occurred: %s", body),
-			}
-			return
-		}
-		// success !!
-		res <- &NotificationResult{
-			IsError: false,
-		}
-		if c.isVerbose {
-			dumpResponse, errLog := httputil.DumpResponse(response, true)
-			if errLog == nil {
-				responseDump := string(dumpResponse)
-				log.Printf("response:\n %s\n", responseDump)
-			}
-		}
-
-	}()
+	go c.sendNotification(request, res)
 	return res
+}
+
+// sends the notification using the request provided and stores the results in the res channel
+func (c *customClient) sendNotification(request *http.Request, res chan *NotificationResult) {
+	defer close(res)
+
+	if c.isVerbose {
+		dumpRequest, errLog := httputil.DumpRequestOut(request, true)
+		if errLog == nil {
+			requestDump := string(dumpRequest)
+			log.Printf("request:\n %s\n", requestDump)
+		}
+	}
+	buf := new(bytes.Buffer)
+	buf.Reset()
+	// send payload
+	response, err := c.client.Do(request)
+	// handle technical errors
+	if err != nil {
+		res <- &NotificationResult{
+			IsError:      true,
+			ErrorDetails: err,
+		}
+		return
+	}
+	// flush body at the end to avoid memory leak
+	defer func() {
+		_ = response.Body.Close()
+	}()
+	// handle business errors
+	if inError(response.StatusCode) {
+		body, errRead := ioutil.ReadAll(response.Body)
+		if errRead != nil {
+			res <- &NotificationResult{
+				IsError:      true,
+				ErrorDetails: errors.Wrap(errRead, "cannot decode response body"),
+			}
+			return
+		}
+		res <- &NotificationResult{
+			IsError:      true,
+			ErrorDetails: fmt.Errorf("error occurred: %s", body),
+		}
+		return
+	}
+	// success !!
+	res <- &NotificationResult{
+		IsError: false,
+	}
+	if c.isVerbose {
+		dumpResponse, errLog := httputil.DumpResponse(response, true)
+		if errLog == nil {
+			responseDump := string(dumpResponse)
+			log.Printf("response:\n %s\n", responseDump)
+		}
+	}
+
 }
 
 // The Prepare function will prepare the http.Request based on the url path and the body provided.

@@ -6,17 +6,26 @@ import (
 	"github.com/br0tchain/go-notifier/domain"
 	"github.com/br0tchain/go-notifier/lib"
 	"github.com/pkg/errors"
+	"log"
+	"net/http"
 	"os"
 	"regexp"
 	"time"
 )
 
+const (
+	defaultDuration        = "5s"
+	errNoContent           = "no message content has been provided"
+	errInvalidInput        = "invalid input"
+	errTemplateNoFileFound = "file %s could not be read"
+)
+
 var (
-	inputRegexp        = regexp.MustCompile(`^notify --url[ =]([\S]+) (.*)$`)
+	inputRegexp        = regexp.MustCompile(`^notify --url[ =](\S+) (.*)$`)
 	helpRegexp         = regexp.MustCompile(`^notify --help`)
 	flagIntervalRegexp = regexp.MustCompile(`-i[ =]([0-9]+[a-z]+)`)
-	flagMessageRegexp  = regexp.MustCompile(`-m[ =]([\S]+])`)
-	flagFileRegexp     = regexp.MustCompile(`-f[ =]([\S]+])`)
+	flagMessageRegexp  = regexp.MustCompile(`-m[ =]"(.*)"`)
+	flagFileRegexp     = regexp.MustCompile(`-f[ =](\S+)`)
 )
 
 type notifier struct {
@@ -33,6 +42,7 @@ func NewNotifier(client lib.Client) Notify {
 	}
 }
 
+//run the scanner to get the input from the user for different notifications
 func (n notifier) ReadInput() {
 	displayHelp()
 	go func() {
@@ -54,6 +64,7 @@ func (n notifier) ReadInput() {
 	}()
 }
 
+//parse the input received to extract the url and other params to send the notification
 func (n notifier) parseInput(input string) error {
 	submatch := inputRegexp.FindAllStringSubmatch(input, -1)
 	//no url specified
@@ -62,40 +73,59 @@ func (n notifier) parseInput(input string) error {
 		//requesting help
 		if len(help) > 0 {
 			displayHelp()
+			return nil
 		} else { //invalid input
 			displayInvalidInput()
+			return fmt.Errorf(errInvalidInput)
 		}
 	}
 	dataToHandle := submatch[0]
+	//check if enough params provided
 	if len(dataToHandle) < 3 {
 		displayInvalidInput()
+		return fmt.Errorf(errInvalidInput)
 	}
-
-	params, err := parseFlags(dataToHandle[2])
+	//retrieving flags from command
+	params, err := n.parseFlags(dataToHandle[2])
 	if err != nil {
 		return err
 	}
+	//prepare http request
 	request, err := n.Client.Prepare(dataToHandle[1], params.Body)
 	if err != nil {
 		return err
 	}
-	go func() {
-		ticker := time.NewTicker(params.Interval)
-		defer ticker.Stop()
-		for {
-			results := n.Client.Notify(request)
-			result := n.Client.GetNotificationResult(results)
-			if result.IsError {
-				fmt.Printf("warning: error occurred on request to \n %s \n with response \n %+v", request.URL.String(), result.ErrorDetails)
-			}
-			<-ticker.C
-		}
-	}()
+	//sending notification
+	go n.triggerNotification(params.Interval, request)
 	return nil
 }
 
-func parseFlags(flags string) (*domain.Params, error) {
-	interval, _ := time.ParseDuration("5s")
+//trigger notification to send the request every interval
+func (n notifier) triggerNotification(interval time.Duration, request *http.Request) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		log.Print(time.Now().String())
+		//sending notification
+		results := n.Client.Notify(request)
+		go n.getError(results, request)
+		//waiting for next tick to loop
+		<-ticker.C
+	}
+}
+
+//retrieve the error of the request from the results channel
+func (n notifier) getError(results <-chan *lib.NotificationResult, request *http.Request) {
+	//retrieving notification once received
+	result := n.Client.GetNotificationResult(results)
+	if result.IsError {
+		fmt.Printf("warning: error occurred on request to \n %s \n with response \n %+v", request.URL.String(), result.ErrorDetails)
+	}
+}
+
+//parse the flags receive to extract the body of the notification and the interval requested
+func (n notifier) parseFlags(flags string) (*domain.Params, error) {
+	interval, _ := time.ParseDuration(defaultDuration)
 	//parsing interval
 	intervalParsed := flagIntervalRegexp.FindAllStringSubmatch(flags, -1)
 	//overriding default interval
@@ -118,11 +148,11 @@ func parseFlags(flags string) (*domain.Params, error) {
 	//no message, parsing file
 	fileParsed := flagFileRegexp.FindAllStringSubmatch(flags, -1)
 	if len(fileParsed) == 0 {
-		return nil, fmt.Errorf("no message content has been provided")
+		return nil, fmt.Errorf(errNoContent)
 	}
 	data, err := os.ReadFile(fileParsed[0][1])
 	if err != nil {
-		return nil, errors.Wrap(err, fmt.Sprintf("file %s could not be read", fileParsed[0][1]))
+		return nil, errors.Wrap(err, fmt.Sprintf(errTemplateNoFileFound, fileParsed[0][1]))
 	}
 	return &domain.Params{
 		Interval: interval,
@@ -138,7 +168,7 @@ Flags:
     -m 		Specify message to be sent 
     -f 		Retrieve the content of a file to be sent as the message content 
 Example call:
-	$ notify --url http://localhost:8080/notify --file messages.txt`)
+	$ notify --url http://localhost:8080/notify -m "content to be sent"`)
 }
 
 func displayInvalidInput() {
