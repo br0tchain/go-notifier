@@ -6,7 +6,6 @@ import (
 	"github.com/br0tchain/go-notifier/domain"
 	"github.com/br0tchain/go-notifier/lib"
 	"github.com/pkg/errors"
-	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -26,6 +25,7 @@ var (
 	flagIntervalRegexp = regexp.MustCompile(`-i[ =]([0-9]+[a-z]+)`)
 	flagMessageRegexp  = regexp.MustCompile(`-m[ =]"(.*)"`)
 	flagFileRegexp     = regexp.MustCompile(`-f[ =](\S+)`)
+	flagSilentRegexp   = regexp.MustCompile(`--silent`)
 )
 
 type notifier struct {
@@ -96,19 +96,20 @@ func (n notifier) parseInput(input string) error {
 		return err
 	}
 	//sending notification
-	go n.triggerNotification(params.Interval, request)
+	go n.triggerNotification(params, request)
 	return nil
 }
 
 //trigger notification to send the request every interval
-func (n notifier) triggerNotification(interval time.Duration, request *http.Request) {
-	ticker := time.NewTicker(interval)
+func (n notifier) triggerNotification(params *domain.Params, request *http.Request) {
+	ticker := time.NewTicker(params.Interval)
 	defer ticker.Stop()
 	for {
-		log.Print(time.Now().String())
 		//sending notification
 		results := n.Client.Notify(request)
-		go n.getError(results, request)
+		if !params.IsSilent {
+			go n.getError(results, request)
+		}
 		//waiting for next tick to loop
 		<-ticker.C
 	}
@@ -119,13 +120,14 @@ func (n notifier) getError(results <-chan *lib.NotificationResult, request *http
 	//retrieving notification once received
 	result := n.Client.GetNotificationResult(results)
 	if result.IsError {
-		fmt.Printf("warning: error occurred on request to \n %s \n with response \n %+v", request.URL.String(), result.ErrorDetails)
+		fmt.Printf("warning: error occurred on request to \n %s \n with response \n %+v\n", request.URL.String(), result.ErrorDetails)
 	}
 }
 
 //parse the flags receive to extract the body of the notification and the interval requested
 func (n notifier) parseFlags(flags string) (*domain.Params, error) {
 	interval, _ := time.ParseDuration(defaultDuration)
+	isSilent := false
 	//parsing interval
 	intervalParsed := flagIntervalRegexp.FindAllStringSubmatch(flags, -1)
 	//overriding default interval
@@ -137,12 +139,18 @@ func (n notifier) parseFlags(flags string) (*domain.Params, error) {
 		interval = i
 	}
 
+	//no message, parsing file
+	isSilentParsed := flagSilentRegexp.FindAllStringSubmatch(flags, -1)
+	if len(isSilentParsed) > 0 {
+		isSilent = true
+	}
 	//parsing message
 	messageParsed := flagMessageRegexp.FindAllStringSubmatch(flags, -1)
 	if len(messageParsed) > 0 {
 		return &domain.Params{
 			Interval: interval,
 			Body:     messageParsed[0][1],
+			IsSilent: isSilent,
 		}, nil
 	}
 	//no message, parsing file
@@ -157,18 +165,20 @@ func (n notifier) parseFlags(flags string) (*domain.Params, error) {
 	return &domain.Params{
 		Interval: interval,
 		Body:     string(data),
+		IsSilent: isSilent,
 	}, nil
 }
 
 func displayHelp() {
 	fmt.Println(`usage: notify --url=URL [<flags>]
 Flags:
-	--help 	Show context-sensitive help.
-	-i      =5s Notification interval.
-    -m 		Specify message to be sent 
-    -f 		Retrieve the content of a file to be sent as the message content 
+	--help		Show context-sensitive help.
+	-i		=5s Notification interval.
+	-m		Specify message to be sent 
+	-f		Retrieve the content of a file to be sent as the message content 
+	--silent	Add this flag to avoid displaying error messages
 Example call:
-	$ notify --url http://localhost:8080/notify -m "content to be sent"`)
+	$notify --url http://localhost:8080/notify -m "content to be sent" --silent`)
 }
 
 func displayInvalidInput() {
