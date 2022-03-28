@@ -16,7 +16,7 @@ var (
 
 func main() {
 	begin := time.Now()
-	client = lib.New()
+	client = lib.New(lib.SetVerbose(loadArgs()))
 	notifier := usecase.NewNotifier(client)
 	notifier.ReadInput()
 	//handle quitting program
@@ -26,4 +26,11 @@ func main() {
 	<-quit
 	log.Printf("shutting down server ...")
 	log.Printf("server exiting after %s", time.Since(begin))
+}
+
+func loadArgs() bool {
+	if len(os.Args) > 1 {
+		return os.Args[1] == "--verbose"
+	}
+	return false
 }
